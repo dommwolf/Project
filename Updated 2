@@ -365,3 +365,221 @@ awk -F'\t' 'NR>1 && $5=="yes" && $6=="no"{c++} END{print c+0}' "$OUT_T3"
 
 echo -n "Asym (mean≥3) dispar_yes_histo_no: "
 awk -F'\t' 'NR>1 && $5=="no"  && $6=="yes"{c++} END{print c+0}'
+
+#!/usr/bin/env bash
+
+#!/usr/bin/env bash
+
+# ───────────────────────────────────────────────
+# Step F: Prepare gene BEDs, find closest genes, and bin by expression
+# ───────────────────────────────────────────────
+
+BASEDIR=~/Edispar_SINE_project_2
+
+# ───────────────────────────
+# BED Preparation
+# ───────────────────────────
+
+# Extract gene entries from GFF to BED (histolytica)
+awk -F'\t' '$3 == "gene" {
+  match($9, /ID=gene:([^;]+)/, arr)
+  print $1, $4-1, $5, arr[1], ".", $7
+}' OFS="\t" 00_inputs/histolytica/Entamoeba_histolytica.JCVI-ESG2-1.0.60.cleaned.sorted.gff3 \
+> /tmp/histolytica_genes_fixed.bed
+
+# Add .1 to contig names to match SINE BEDs (histolytica)
+awk 'BEGIN{OFS="\t"} {
+  $1 = $1 ".1"
+  print
+}' /tmp/histolytica_genes_fixed.bed > /tmp/histolytica_genes_fixed_dot1.bed
+
+# Extract protein_coding_gene entries to BED (dispar)
+awk -F'\t' '$3 == "protein_coding_gene" {
+  match($9, /ID=([^;]+)/, arr)
+  print $1, $4-1, $5, arr[1], ".", $7
+}' OFS="\t" 00_inputs/dispar/AmoebaDB-59_EdisparSAW760.cleaned.sorted.gff \
+> /tmp/dispar_genes_fixed.bed
+
+# Add .1 to contig names to match SINE BEDs (dispar)
+awk 'BEGIN{OFS="\t"} {
+  $1 = $1 ".1"
+  print
+}' /tmp/dispar_genes_fixed.bed > /tmp/dispar_genes_fixed_dot1.bed
+
+# ───────────────────────────
+# Step F1: Find closest genes
+# ───────────────────────────
+
+# Set paths to corrected SINE and GENE BEDs
+declare -A SINE_BEDS=(
+  [histolytica]="/tmp/histolytica_sine_coords.bed"
+  [dispar]="/tmp/dispar_sine_coords.bed"
+)
+
+declare -A GENE_BEDS=(
+  [histolytica]="/tmp/histolytica_genes_fixed_dot1.bed"
+  [dispar]="/tmp/dispar_genes_fixed_dot1.bed"
+)
+
+# Create output directories
+mkdir -p "$BASEDIR/10_flanking_genes"/{histolytica,dispar}
+mkdir -p "$BASEDIR/10_flanking_genes/distance_bins_expanded"
+
+echo "► Step F1: Finding closest genes..."
+
+for sp in histolytica dispar; do
+  echo "→ Processing $sp"
+
+  SINE="${SINE_BEDS[$sp]}"
+  GENE="${GENE_BEDS[$sp]}"
+  OUT="$BASEDIR/10_flanking_genes/${sp}/SINE1_to_gene_all_dist.tsv"
+
+  bedtools closest -D a -t first -k 1 -a "$SINE" -b "$GENE" > /tmp/${sp}_closest_raw.tsv
+
+  awk 'BEGIN {OFS="\t"; print "sine_locus", "gene_id", "distance", "direction"}
+       {
+         locus = $1 ":" $2 "-" $3
+         gene  = $8
+         dist  = $13
+         dir   = (dist < 0) ? "upstream" : "downstream"
+         print locus, gene, (dist < 0 ? -dist : dist), dir
+       }' /tmp/${sp}_closest_raw.tsv > "$OUT"
+
+  echo "   [$sp] → Closest gene file written: $OUT"
+done
+
+# ───────────────────────────
+# Step F2: Bin by distance and expression
+# ───────────────────────────
+echo "► Step F2: Binning by distance and expression..."
+
+for sp in histolytica dispar; do
+  echo "→ Processing $sp"
+
+  DIST="$BASEDIR/10_flanking_genes/${sp}/SINE1_to_gene_all_dist.tsv"
+  EXPR="$BASEDIR/10_flanking_genes/${sp}/SINE1_to_gene_all_exprflag.tsv"
+  OUT="$BASEDIR/10_flanking_genes/distance_bins_expanded/${sp}_binned_summary.tsv"
+
+  awk -v BW=1000 -v MAX=10000 'NR==FNR && FNR > 1 {expr[$1] = $3; next}
+       FNR > 1 {
+         dist = $3
+         dir  = $4
+         flag = ($1 in expr ? expr[$1] : "no")
+
+         if (dist <= MAX) {
+           bin = int(dist / BW) * BW
+           key = bin "\t" (bin+BW) "\t" dir
+           total[key]++
+           if (flag == "yes") expressed[key]++
+         }
+       }
+       END {
+         print "bin_lower", "bin_upper", "direction", "expressed", "total"
+         for (k in total) {
+           print k, (expressed[k]+0), total[k]
+         }
+       }' "$EXPR" "$DIST" > "$OUT"
+
+  echo "   [$sp] → Binned summary written: $OUT"
+done
+
+#!/usr/bin/env bash
+
+# ─────────────────────────────────────────────────────────────
+# STEP G: SINE proximity to asymmetrically expressed genes
+# G1: Clean SINE→gene distances
+# G2: Filter to expression-asymmetric gene lists
+# G3: Check for SINEs within ±2kb of those genes
+# ─────────────────────────────────────────────────────────────
+
+BASEDIR=~/Edispar_SINE_project_2
+
+# ──────────────────────────────
+# G1: Clean SINE→gene distances
+# ──────────────────────────────
+
+# Clean gene IDs (strip "gene:" if present)
+awk 'BEGIN{OFS="\t"} {sub(/^gene:/, "", $4); print}' /tmp/histolytica_genes_fixed_dot1.bed > /tmp/histolytica_genes_clean.bed
+awk 'BEGIN{OFS="\t"} {sub(/^gene:/, "", $4); print}' /tmp/dispar_genes_fixed_dot1.bed > /tmp/dispar_genes_clean.bed
+
+for sp in histolytica dispar; do
+  echo "→ Processing $sp"
+  SINE="08_SINE1_union/$sp/SINE1_union.bed"
+  GENE="/tmp/${sp}_genes_clean.bed"
+  OUT="$BASEDIR/10_flanking_genes/${sp}/SINE1_to_gene_all_dist_clean.tsv"
+
+  sort -k1,1 -k2,2n "$SINE" \
+    | bedtools closest -a - -b "$GENE" -D a \
+    | awk 'BEGIN{OFS="\t"} {
+        locus = $1 ":" $2 "-" $3
+        gene  = $8
+        if (gene == ".") next
+        dist = $NF
+        print locus, gene, dist
+      }' > "$OUT"
+
+  echo "   [$sp] → Cleaned distance file written: $OUT"
+done
+
+# ─────────────────────────────────────────────
+# G2: Filter to asymmetrically expressed genes
+# ─────────────────────────────────────────────
+
+# Histolytica-specific
+grep -Ff histo_expr_yes_dispar_no.txt \
+  "$BASEDIR/10_flanking_genes/histolytica/SINE1_to_gene_all_dist_clean.tsv" \
+  > histo_asym_SINE_distances.tsv
+echo "→ histo_asym_SINE_distances.tsv: $(wc -l < histo_asym_SINE_distances.tsv) lines"
+
+# Dispar-specific
+grep -Ff dispar_expr_yes_histo_no.txt \
+  "$BASEDIR/10_flanking_genes/dispar/SINE1_to_gene_all_dist_clean.tsv" \
+  > dispar_asym_SINE_distances.tsv
+echo "→ dispar_asym_SINE_distances.tsv: $(wc -l < dispar_asym_SINE_distances.tsv) lines"
+
+# ─────────────────────────────────────────────
+# G3: Windowed intersect ±2 kb to find nearby SINEs
+# ─────────────────────────────────────────────
+
+# HISTOLYTICA
+grep -Ff histo_expr_yes_dispar_no.txt /tmp/histolytica_genes_fixed_dot1.bed \
+  > tmp_histo_expr_genes.bed
+
+awk 'BEGIN{OFS="\t"}{ s=$2-2000; if(s<0)s=0; e=$3+2000; print $1,s,e,$4 }' \
+  tmp_histo_expr_genes.bed > tmp_histo_expr_genes_2kb.bed
+
+bedtools intersect -u \
+  -a tmp_histo_expr_genes_2kb.bed \
+  -b 08_SINE1_union/histolytica/SINE1_union.bed \
+  > histo_2kb_SINE_hits.bed
+
+echo "→ histo_2kb_SINE_hits.bed: $(wc -l < histo_2kb_SINE_hits.bed) of $(wc -l < histo_expr_yes_dispar_no.txt) genes have a SINE within ±2 kb"
+
+# DISPAR
+grep -Ff dispar_expr_yes_histo_no.txt /tmp/dispar_genes_fixed_dot1.bed \
+  > tmp_dispar_expr_genes.bed
+
+awk 'BEGIN{OFS="\t"}{ s=$2-2000; if(s<0)s=0; e=$3+2000; print $1,s,e,$4 }' \
+  tmp_dispar_expr_genes.bed > tmp_dispar_expr_genes_2kb.bed
+
+bedtools intersect -u \
+  -a tmp_dispar_expr_genes_2kb.bed \
+  -b 08_SINE1_union/dispar/SINE1_union.bed \
+  > dispar_2kb_SINE_hits.bed
+
+echo "→ dispar_2kb_SINE_hits.bed: $(wc -l < dispar_2kb_SINE_hits.bed) of $(wc -l < dispar_expr_yes_histo_no.txt) genes have a SINE within ±2 kb"
+
+# Cleanup
+rm tmp_*_expr_genes*.bed
+
+# ─────────────────────────────────────────────
+# Final candidate + background gene sets
+# ─────────────────────────────────────────────
+
+cut -f4 dispar_2kb_SINE_hits.bed | sort -u > dispar_SINE4_genes.txt
+echo "→ dispar_SINE4_genes.txt: $(wc -l < dispar_SINE4_genes.txt) genes"
+
+grep -P "\tprotein_coding_gene\t" 00_inputs/dispar/AmoebaDB-59_EdisparSAW760.cleaned.sorted.gff \
+  | sed -E 's/.*ID=([^;]+);.*/\1/' \
+  | sort -u > all_dispar_genes.txt
+echo "→ all_dispar_genes.txt: $(wc -l < all_dispar_genes.txt) genes"
