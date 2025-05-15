@@ -274,3 +274,94 @@ echo "13D: Scaffolded orthologue summary → $OUT_full"
 ls -lh "$OUT_full"
 wc -l "$OUT_full"
 head -n 20 "$OUT_full"
+
+#!/usr/bin/env bash
+
+# ──────────────────────────────────────────────────────────────────────
+# E1: Clean expression tables and apply mean expression cutoff (≥ 3 TPM)
+# ──────────────────────────────────────────────────────────────────────
+
+ROOT=~/Edispar_SINE_project_2
+THR_MEAN=3
+
+echo "► Cleaning gene expression tables..."
+for sp in histolytica dispar; do
+  in="${ROOT}/10_flanking_genes/${sp}/gene_expression_counts.tsv"
+  out="${ROOT}/10_flanking_genes/${sp}/gene_expression_counts_cleaned.tsv"
+
+  awk 'BEGIN{OFS="\t"}
+       NR==1 {print; next}
+       {
+         sub(/^gene:/, "", $1)
+         print
+       }' "$in" > "$out"
+
+  echo "[$sp] cleaned → $(wc -l < "$out") lines"
+done
+
+echo
+echo "► Filtering for mean expression ≥ $THR_MEAN..."
+for sp in histolytica dispar; do
+  CNT="${ROOT}/10_flanking_genes/${sp}/gene_expression_counts_cleaned.tsv"
+  OUT="${ROOT}/10_flanking_genes/${sp}/expressed_genes_T3.txt"
+
+  awk -v T="$THR_MEAN" '
+    NR == 1 {next}
+    {
+      sum = 0
+      for (i = 2; i <= NF; i++) sum += $i
+      if ((NF - 1) > 0 && (sum / (NF - 1)) >= T)
+        print $1
+    }
+  ' "$CNT" | sort -u > "$OUT"
+
+  echo "[$sp] genes mean≥$THR_MEAN: $(wc -l < "$OUT")"
+done
+
+#!/usr/bin/env bash
+
+# ─────────────────────────────────────────────────────────────
+# E2: Annotate RBH gene pairs with SINE transcription and T3
+# ─────────────────────────────────────────────────────────────
+
+ROOT=~/Edispar_SINE_project_2
+RBH=/tmp/rbh_fixed.tsv
+OUT_T3=$ROOT/10_flanking_genes/orthologue_SINE_expr_summary_T3.tsv
+
+# Clean RBH gene IDs
+CLEANED_RBH=/tmp/rbh_cleaned_for_T3.tsv
+awk '{
+  gsub(/A$/, "", $1);                            # Remove trailing A
+  gsub(/^transcript:rna_/, "", $2);              # Remove transcript:rna_
+  gsub(/-1$/, "", $2);                           # Remove -1 suffix
+  print $2 "\t" $1
+}' "$RBH" > "$CLEANED_RBH"
+
+# Write header
+echo -e "Histo_gene\tDispar_gene\tHisto_SINE_expr\tDispar_SINE_expr\tHisto_gene_expr_T3\tDispar_gene_expr_T3" > "$OUT_T3"
+
+# Loop through each cleaned RBH pair
+while read -r H D; do
+  # SINE expression flags
+  Hs=$(awk -v g="$H" '$1==g{print $3; exit}' "$ROOT/10_flanking_genes/histolytica/SINE1_to_gene_all_exprflag.tsv" || echo NA)
+  Ds=$(awk -v g="$D" '$1==g{print $3; exit}' "$ROOT/10_flanking_genes/dispar/SINE1_to_gene_all_exprflag.tsv" || echo NA)
+
+  # Expression mean≥3 flag
+  Hg3=$(grep -Fxq "$H" "$ROOT/10_flanking_genes/histolytica/expressed_genes_T3.txt" && echo yes || echo no)
+  Dg3=$(grep -Fxq "$D" "$ROOT/10_flanking_genes/dispar/expressed_genes_T3.txt"    && echo yes || echo no)
+
+  echo -e "$H\t$D\t$Hs\t$Ds\t$Hg3\t$Dg3" >> "$OUT_T3"
+done < "$CLEANED_RBH"
+
+# Summary checks
+echo
+echo "► Summary (E2 output): $OUT_T3"
+wc -l "$OUT_T3"                          # Should be 5003
+cut -f5 "$OUT_T3" | sort | uniq -c      # Histo expression yes/no counts
+cut -f6 "$OUT_T3" | sort | uniq -c      # Dispar expression yes/no counts
+
+echo -n "Asym (mean≥3) histo_yes_dispar_no: "
+awk -F'\t' 'NR>1 && $5=="yes" && $6=="no"{c++} END{print c+0}' "$OUT_T3"
+
+echo -n "Asym (mean≥3) dispar_yes_histo_no: "
+awk -F'\t' 'NR>1 && $5=="no"  && $6=="yes"{c++} END{print c+0}'
