@@ -398,12 +398,14 @@ for sp in histolytica dispar; do
   wc -l < "$outdir/SINE1_hmm_len400.bed"
 done
         
-cd ~/Edispar_SINE_project_2
-module purge
-module load bedtools/2.31.1
+#!/usr/bin/env bash
+set -euo pipefail
 
+# Loop through histolytica and dispar species
 for sp in histolytica dispar; do
   echo "=== Merging SINE1 calls for $sp ==="
+  
+  # Define input files for each species
   if [ "$sp" = histolytica ]; then
     FT=01_feature_tables/histolytica/SINE1_fixed.bed
     RM=02_repeatmasker/histolytica/RM_SINE1.bed
@@ -415,32 +417,33 @@ for sp in histolytica dispar; do
     HMM=05_nhmmer/dispar/SINE1_hmm_len400.bed
     OUT=08_SINE1_union/dispar/SINE1_union.bed
   fi
+
+  # Create output directory if it doesn't exist
   mkdir -p "$(dirname "$OUT")"
 
-  awk 'BEGIN{OFS="\t"}{print $1,$2,$3,"FT"}'  "$FT"  > tmp_FT.bed
-  awk 'BEGIN{OFS="\t"}{print $1,$2,$3,"RM"}'  "$RM"  > tmp_RM.bed
+  # Prepare individual BED files for FT, RM, HMM
+  awk 'BEGIN{OFS="\t"}{print $1,$2,$3,"FT"}' "$FT" > tmp_FT.bed
+  awk 'BEGIN{OFS="\t"}{print $1,$2,$3,"RM"}' "$RM" > tmp_RM.bed
   awk 'BEGIN{OFS="\t"}{print $1,$2,$3,"HMM"}' "$HMM" > tmp_HMM.bed
 
-  cat tmp_FT.bed tmp_RM.bed tmp_HMM.bed \
-    | sort -k1,1 -k2,2n \
-    | bedtools merge -i - -c 4 -o distinct \
-    > "$OUT"
+  # Merge the BED files and save the union
+  cat tmp_FT.bed tmp_RM.bed tmp_HMM.bed | sort -k1,1 -k2,2n | bedtools merge -i - -c 4 -o distinct > "$OUT"
 
+  # Remove temporary files
   rm tmp_FT.bed tmp_RM.bed tmp_HMM.bed
 
+  # Output the number of merged intervals
   echo -n "$sp union intervals: "
   wc -l < "$OUT"
 done
 
-# ────────────────────────────────────────────────────────────────────────────
-# 8b) Extract FT-only, RM-only, and HMM-only SINE lists
-# ────────────────────────────────────────────────────────────────────────────
+#!/usr/bin/env bash
+set -euo pipefail
 
-cd ~/Edispar_SINE_project_2
-
-# Load bedtools if you like (though awk alone suffices here)
+# Load bedtools
 module load bedtools/2.31.1
 
+# Loop through histolytica and dispar species
 for sp in histolytica dispar; do
   UNION=08_SINE1_union/$sp/SINE1_union.bed
   OUTDIR=08_SINE1_union/$sp/set_comparisons
@@ -462,10 +465,6 @@ for sp in histolytica dispar; do
   echo "[$sp] RM-only: $(wc -l < "$OUTDIR/${sp}_RM_only.bed")"
   echo "[$sp] HMM-only: $(wc -l < "$OUTDIR/${sp}_HMM_only.bed")"
 done
-
-
-#!/usr/bin/env bash
-set -euo pipefail
 
 # 1) Load modules
 module load samtools/1.6
@@ -516,6 +515,84 @@ for bam in "$RNA_D"/SRR*.bam; do
             -o "$OUT_D/${sample}.guided.gtf" \
             "$bam"
 done
+
+# Set file paths with full paths
+GFF_FILE="$HOME/Edispar_SINE_project_2/00_inputs/histolytica/Entamoeba_histolytica.JCVI-ESG2-1.0.60.fixed2.gff3"
+SINE1_UNION_FILE="$HOME/Edispar_SINE_project_2/08_SINE1_union/histolytica/SINE1_union.bed"
+
+# Verify file paths
+echo "$GFF_FILE"
+echo "$SINE1_UNION_FILE"
+
+# Check files
+ls "$GFF_FILE"
+ls "$SINE1_UNION_FILE"
+
+# Set file paths for histolytica and dispar GFF and SINE files
+GFF_FILE="/users/guests/guest5/Edispar_SINE_project_2/00_inputs/histolytica/Entamoeba_histolytica.JCVI-ESG2-1.0.60.fixed2.gff3"
+SINE1_UNION_FILE="/users/guests/guest5/Edispar_SINE_project_2/08_SINE1_union/histolytica/SINE1_union.bed"
+AUGMENTED_GTF_FILE="/users/guests/guest5/Edispar_SINE_project_2/07_StringTie/histolytica/B_genes_plus_SINEs/augmented.gtf"
+
+# Ensure output directory exists
+mkdir -p "$(dirname "$AUGMENTED_GTF_FILE")"
+
+# Step 1: Combine gene annotations and SINE regions into augmented GTF
+awk -v OFS='\t' '
+  FNR==NR {
+    # Process GFF file to include gene, mRNA, exon, CDS
+    if ($0 ~ /^#/ ) next
+    if ($3=="gene" || $3=="mRNA" || $3=="exon" || $3=="CDS") {
+      split($9, A, ";")
+      id = A[1]
+      print $1, $2, $3, $4, $5, $6, $7, $8, "gene_id \"" id "\"; transcript_id \"" id "\";"
+    }
+    next
+  }
+  {
+    # Add SINE regions as transcript and exon features
+    chr   = $1
+    start = $2 + 1  # GTF is 1-based, so we add 1 for start position
+    end   = $3
+    id    = "SINE1_" NR
+    print chr, "StringTie", "transcript", start, end, ".", "+", ".", "gene_id \"" id "\"; transcript_id \"" id "\";"
+    print chr, "StringTie", "exon", start, end, ".", "+", ".", "gene_id \"" id "\"; transcript_id \"" id "\";"
+  }
+' "$GFF_FILE" <(cut -f1-3 "$SINE1_UNION_FILE") > "$AUGMENTED_GTF_FILE"
+
+echo "Augmented GTF file created at: $AUGMENTED_GTF_FILE"
+
+# Set file paths for dispar
+GFF_FILE="/users/guests/guest5/Edispar_SINE_project_2/00_inputs/dispar/AmoebaDB-59_EdisparSAW760.fixed2.gff"
+SINE1_UNION_FILE="/users/guests/guest5/Edispar_SINE_project_2/08_SINE1_union/dispar/SINE1_union.bed"
+AUGMENTED_GTF_FILE="/users/guests/guest5/Edispar_SINE_project_2/07_StringTie/dispar/B_genes_plus_SINEs/augmented.gtf"
+
+# Ensure output directory exists
+mkdir -p "$(dirname "$AUGMENTED_GTF_FILE")"
+
+# Step 1: Combine gene annotations and SINE regions into augmented GTF
+awk -v OFS='\t' '
+  FNR==NR {
+    # Process GFF file to include gene, mRNA, exon, CDS
+    if ($0 ~ /^#/ ) next
+    if ($3=="gene" || $3=="mRNA" || $3=="exon" || $3=="CDS") {
+      split($9, A, ";")
+      id = A[1]
+      print $1, $2, $3, $4, $5, $6, $7, $8, "gene_id \"" id "\"; transcript_id \"" id "\";"
+    }
+    next
+  }
+  {
+    # Add SINE regions as transcript and exon features
+    chr   = $1
+    start = $2 + 1  # GTF is 1-based, so we add 1 for start position
+    end   = $3
+    id    = "SINE1_" NR
+    print chr, "StringTie", "transcript", start, end, ".", "+", ".", "gene_id \"" id "\"; transcript_id \"" id "\";"
+    print chr, "StringTie", "exon", start, end, ".", "+", ".", "gene_id \"" id "\"; transcript_id \"" id "\";"
+  }
+' "$GFF_FILE" <(cut -f1-3 "$SINE1_UNION_FILE") > "$AUGMENTED_GTF_FILE"
+
+echo "Augmented GTF file created at: $AUGMENTED_GTF_FILE"
 
 # ───────────────────────────────────────────────────────────────────────────────
 # 9b) Guided assembly: “genes + SINEs” using fixed2 GFFs
@@ -641,10 +718,8 @@ ls -lh 10_novel_transcripts/{histolytica,dispar}/*.bed
 
 
 # =============================================================================
-# 10. Identify expressed SINE1 transcripts
+# 10a. Convert ab-initio GTFs to BED
 # =============================================================================
-
-echo "=== 10a: Converting ab-initio GTFs to BED ==="
 for sp in histolytica dispar; do
   ABI_GTF_DIR="07_StringTie/$sp/C_abinitio"
   ABI_BED="09_SINE1_downstream/$sp/all_abinitio_transcripts.bed"
@@ -661,16 +736,27 @@ for sp in histolytica dispar; do
   echo "  → $sp: $(wc -l < "$ABI_BED") transcripts in BED"
 done
 
-echo "=== 10b: Finding expressed SINE1 overlaps ==="
+# =============================================================================
+# 10b. Find expressed SINE1 overlaps
+# =============================================================================
 module load bedtools/2.31.1
 for sp in histolytica dispar; do
   ABI_BED="09_SINE1_downstream/$sp/all_abinitio_transcripts.bed"
   UNION_BED="08_SINE1_union/$sp/SINE1_union.bed"
   EXP_BED="09_SINE1_downstream/$sp/expressed_SINEs_abinitio.bed"
   mkdir -p "$(dirname "$EXP_BED")"
-  echo "→ $sp: intersecting ab-initio transcripts with SINE1_union"
   bedtools intersect -u -a "$ABI_BED" -b "$UNION_BED" > "$EXP_BED"
   echo "  → $sp: $(wc -l < "$EXP_BED") expressed‐SINE transcripts"
+done
+
+# =============================================================================
+# 10c. List expressed SINE transcript IDs
+# =============================================================================
+for sp in histolytica dispar; do
+  EXP_BED="09_SINE1_downstream/$sp/expressed_SINEs_abinitio.bed"
+  OUT_TXT="09_SINE1_downstream/$sp/${sp}_expressed_SINE_txids.txt"
+  cut -f4 "$EXP_BED" | sort -u > "$OUT_TXT"
+  echo "  → $sp: $(wc -l < "$OUT_TXT") unique expressed‐SINE transcript IDs"
 done
 
 echo "=== 10c: Listing expressed SINE transcript IDs ==="
@@ -829,87 +915,135 @@ cd /users/guests/guest5/Edispar_SINE_project_2
 module purge
 module load cufflinks emboss blast/2.11.0 seqtk bedtools
 
-# === 12a) Merge ab-initio GTFs (transcript, exon, CDS) ===
-grep -hP "^\S+\t.*\t(transcript|exon|CDS)\t" 07_StringTie/histolytica/C_abinitio/*.gtf \
-  > merged_histo_abinitio.dedup.gtf
-grep -hP "^\S+\t.*\t(transcript|exon|CDS)\t" 07_StringTie/dispar/C_abinitio/*.gtf \
-  > merged_dispar_abinitio.dedup.gtf
+#!/usr/bin/env bash
 
-# === 12b) Deduplicate per transcript ID ===
-awk -F'\t' 'BEGIN{OFS="\t"}{
-  if(match($9,/transcript_id "([^"]+)"/,m)) id=m[1]; else next
-  if($3=="transcript"){
-    if(!(id in seen)){ seen[id]=1; print }
-  } else if(($3=="exon"||$3=="CDS") && seen[id]==1){
-    print
-  }
-}' merged_histo_abinitio.dedup.gtf > merged_histo_abinitio.final.gtf
+cd ~/Edispar_SINE_project_2
 
-awk -F'\t' 'BEGIN{OFS="\t"}{
-  if(match($9,/transcript_id "([^"]+)"/,m)) id=m[1]; else next
-  if($3=="transcript"){
-    if(!(id in seen)){ seen[id]=1; print }
-  } else if(($3=="exon"||$3=="CDS") && seen[id]==1){
-    print
-  }
-}' merged_dispar_abinitio.dedup.gtf > merged_dispar_abinitio.final.gtf
+# 1) Load tools
+module purge
+module load cufflinks/2.2.1   # provides gffread
+module load emboss/6.6        # provides getorf
+module load blast/2.11.0     # provides makeblastdb & blastp
 
-# === 12c) Reconstruct transcript FASTAs ===
-gffread merged_histo_abinitio.final.gtf \
-  -g 00_inputs/histolytica/*.fna \
-  -w histo_abinitio_transcripts.fna
+# 2) Merge & dedupe ab-initio GTFs
+for sp in histolytica dispar; do
+  raw="merged_${sp}_abinitio.gtf"
+  final="merged_${sp}_abinitio.final.gtf"
 
-gffread merged_dispar_abinitio.final.gtf \
-  -g 00_inputs/dispar/*.fna \
-  -w dispar_abinitio_transcripts.fna
+  echo -e "\n>> [$sp] Merging → $raw"
+  grep -hP "^\S+\t.*\t(transcript|exon|CDS)\t" \
+    07_StringTie/$sp/C_abinitio/*.gtf \
+    > "$raw"
 
-# === 12d) Simplify FASTA headers ===
-for f in histo_abinitio_transcripts.fna dispar_abinitio_transcripts.fna; do
-  awk '/^>/{sub(/^>[^:]+:/,">"); sub(/ .*/,"")}1' "$f" \
-    > "${f%.fna}_id.fna"
+  echo ">> [$sp] Deduplicating → $final"
+  awk -F'\t' 'BEGIN{OFS="\t"}
+    {
+      if (match($9,/transcript_id "([^"]+)"/,m)) id=m[1]
+      else next
+      if      ($3=="transcript")               { if (!seen[id]++) print }
+      else if (($3=="exon"||$3=="CDS") && seen[id]) { print }
+    }
+  ' "$raw" > "$final"
 done
 
-# === 12e) Extract expressed‐SINE transcripts by txID ===
-grep -Ff 09_SINE1_downstream/histolytica/histolytica_expressed_SINE_txids.txt \
-  histo_abinitio_transcripts_id.fna > histo_expressed_SINE_transcripts.fna
+# 3) Rebuild full transcript FASTAs
+for sp in histolytica dispar; do
+  if [ "$sp" = histolytica ]; then
+    GTF="merged_histolytica_abinitio.final.gtf"
+    REF="00_inputs/histolytica/GCA_000208925.2_JCVI_ESG2_1.0_genomic.fna"
+    out="histo_abinitio_transcripts.fna"
+  else
+    GTF="merged_dispar_abinitio.final.gtf"
+    REF="00_inputs/dispar/GCA_000209125.2_JCVI_EDISG_1.0_genomic.fna"
+    out="dispar_abinitio_transcripts.fna"
+  fi
 
-grep -Ff 09_SINE1_downstream/dispar/dispar_expressed_SINE_txids.txt \
-  dispar_abinitio_transcripts_id.fna > dispar_expressed_SINE_transcripts.fna
+  echo -e "\n>> [$sp] gffread → $out"
+  gffread "$GTF" -g "$REF" -w "$out"
+done
 
-# === 12f) ORF prediction, Reciprocal BLASTp & Comparative table ===
-getorf -sequence histo_expressed_SINE_transcripts.fna \
-       -outseq histo_STRG_proteins.faa -minsize 150
-getorf -sequence dispar_expressed_SINE_transcripts.fna \
-       -outseq dispar_STRG_proteins.faa -minsize 150
+# 4) Simplify headers
+for prefix in histo dispar; do
+  in="${prefix}_abinitio_transcripts.fna"
+  out="${prefix}_abinitio_transcripts_id.fna"
+  echo ">> Simplify headers: $in → $out"
+  awk '/^>/{ sub(/^>[^:]+:/, ">"); sub(/ .*/,"") }1' "$in" > "$out"
+done
 
-makeblastdb -in histo_STRG_proteins.faa  -dbtype prot -out histo_STRG.db
-makeblastdb -in dispar_STRG_proteins.faa -dbtype prot -out dispar_STRG.db
+# 5) Extract expressed-SINE transcripts
+for sp in histolytica dispar; do
+  HID="09_SINE1_downstream/$sp/${sp}_expressed_SINE_txids.txt"
+  if [ "$sp" = histolytica ]; then
+    in="histo_abinitio_transcripts_id.fna"
+    out="histo_expressed_SINE_transcripts.fna"
+  else
+    in="dispar_abinitio_transcripts_id.fna"
+    out="dispar_expressed_SINE_transcripts.fna"
+  fi
 
-blastp -query dispar_STRG_proteins.faa -db histo_STRG.db \
-       -out d2h_STRG.tsv -outfmt '6 qseqid sseqid' -max_target_seqs 1 -num_threads 8
+  echo -e "\n>> [$sp] Extracting → $out"
+  awk -v ids="$HID" '
+    BEGIN { while (getline < ids) keep[$1]=1; close(ids) }
+    /^>/ { name=substr($1,2); printing = (name in keep) }
+    printing { print }
+  ' "$in" > "$out"
+done
 
-blastp -query histo_STRG_proteins.faa -db dispar_STRG.db \
-       -out h2d_STRG.tsv -outfmt '6 qseqid sseqid' -max_target_seqs 1 -num_threads 8 &
+# 6) Predict ORFs (min 150 aa)
+for sp in histolytica dispar; do
+  if [ "$sp" = histolytica ]; then
+    seq="histo_expressed_SINE_transcripts.fna"
+    out="histo_SINE_proteins.faa"
+  else
+    seq="dispar_expressed_SINE_transcripts.fna"
+    out="dispar_SINE_proteins.faa"
+  fi
 
-wait
+  echo -e "\n[ $(date +%T) ] Predicting ORFs in $sp → $out"
+  getorf -sequence "$seq" -outseq "$out" -minsize 150
+  echo "   → $(grep -c '^>' "$out") ORFs"
+done
 
-awk '
-  NR==FNR { map[$1] = $2; next }
-  map[$2] == $1 { print $2, $1 }
-' h2d_STRG.tsv d2h_STRG.tsv > rbh_STRG.tsv
+# 7) Build BLAST DBs
+echo -e "\n>> Building BLAST DBs"
+makeblastdb -in histo_SINE_proteins.faa  -dbtype prot -out histo_SINE.db
+makeblastdb -in dispar_SINE_proteins.faa -dbtype prot -out dispar_SINE.db
 
-HID_LIST=09_SINE1_downstream/histolytica/histolytica_expressed_SINE_txids.txt
-DID_LIST=09_SINE1_downstream/dispar/dispar_expressed_SINE_txids.txt
+# 8) Reciprocal BLASTp
+echo -e "\n>> Reciprocal BLASTp"
+blastp -query dispar_SINE_proteins.faa -db histo_SINE.db \
+       -out d2h.tsv -outfmt '6 qseqid sseqid' -max_target_seqs 1 -num_threads 4
+blastp -query histo_SINE_proteins.faa  -db dispar_SINE.db \
+       -out h2d.tsv -outfmt '6 qseqid sseqid' -max_target_seqs 1 -num_threads 4
 
-echo -e "Histo_STRG\tDispar_STRG\tHisto_ext\tDispar_ext" > comparative_STRG_corrected.tsv
-while read histo_id dispar_id; do
-  base_h=${histo_id%%_*}
-  base_d=${dispar_id%%_*}
-  h_flag=$(grep -qx "$base_h" "$HID_LIST" && echo yes || echo no)
-  d_flag=$(grep -qx "$base_d" "$DID_LIST" && echo yes || echo no)
-  echo -e "${histo_id}\t${dispar_id}\t${h_flag}\t${d_flag}"
-done < rbh_STRG.tsv >> comparative_STRG_corrected.tsv
-#!/usr/bin/env bash
+# 9) Filter RBH
+echo -e "\n>> Filtering RBH → rbh_SINE.tsv"
+awk 'NR==FNR{ m[$1]=$2; next } m[$2]==$1 { print $2, $1 }' h2d.tsv d2h.tsv \
+  > rbh_SINE.tsv
+
+# 10) Final comparative table (_n suffix stripped)
+echo -e "\n>> Building comparative_SINE.tsv"
+HID="09_SINE1_downstream/histolytica/histolytica_expressed_SINE_txids.txt"
+DID="09_SINE1_downstream/dispar/dispar_expressed_SINE_txids.txt"
+
+{
+  echo -e "Histo_TX\tDispar_TX\tHisto_expressed\tDispar_expressed"
+  while read -r h_orf d_orf; do
+    base_h=${h_orf%%_*}
+    base_d=${d_orf%%_*}
+    hexp=$(grep -qx "$base_h" "$HID" && echo yes || echo no)
+    dexp=$(grep -qx "$base_d" "$DID" && echo yes || echo no)
+    echo -e "${h_orf}\t${d_orf}\t${hexp}\t${dexp}"
+  done < rbh_SINE.tsv
+} > comparative_SINE.tsv
+
+# 11) Quick smoke-test
+echo -e "\n=== Step 12 smoke-test ==="
+wc -l comparative_SINE.tsv
+head -n5 comparative_SINE.tsv
+grep -c $'\tyes\t' comparative_SINE.tsv
+
+echo -e "\nDone! Step 12 is complete.\n"
 ###############################################################################
 # run_13.sh  –  Section 13: Flanking-gene & orthologue analysis
 #  • 13.1–13.6  full-proteome RBH (clean → makeDB → blastp → top→RBH → clean IDs)
@@ -919,7 +1053,6 @@ done < rbh_STRG.tsv >> comparative_STRG_corrected.tsv
 #  • 13D        merge expression flags into SINE→gene
 #  • 13E        build orthologue summary
 #  • 13F        quick asymmetric report
-###############################################################################
   #!/usr/bin/env bash
 set -euo pipefail
 cd ~/Edispar_SINE_project_2
@@ -1271,7 +1404,3 @@ grep -P "\tgene\t" 00_inputs/dispar/AmoebaDB-59_EdisparSAW760.fixed2.gff.sorted.
   > all_dispar_genes.txt
 echo "→ all_dispar_genes.txt: $(wc -l < all_dispar_genes.txt) genes"
 
-
-echo "Dispar candidates:"
-wc -l dispar_asym_candidates.gff3
-head -n5 dispar_asym_candidates.gff3
