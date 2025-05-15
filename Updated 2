@@ -1,0 +1,276 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Step 1: Adjust Negative Start Positions (Ensure start positions are non-negative)
+
+# For Histolytica - Fix negative start positions
+awk 'BEGIN{OFS="\t"}{
+  if ($2 < 0) $2 = 0;  # Ensure start position is non-negative
+  print $1, $2, $3, $4, $5, $6
+}' /tmp/histolytica_sine_coords.bed > /tmp/histolytica_sine_coords_0based_corrected.bed
+
+# For Dispar - Fix negative start positions
+awk 'BEGIN{OFS="\t"}{
+  if ($2 < 0) $2 = 0;  # Ensure start position is non-negative
+  print $1, $2, $3, $4, $5, $6
+}' /tmp/dispar_sine_coords.bed > /tmp/dispar_sine_coords_0based_corrected.bed
+
+# Step 2: Remove `.1` Suffix from Chromosome Names (Optional, if necessary)
+
+# For Histolytica - Remove `.1` from chromosome names
+awk 'BEGIN{OFS="\t"} {sub(/\.[0-9]+$/, "", $1); print $0}' /tmp/histolytica_sine_coords_0based_corrected.bed > /tmp/histolytica_sine_coords_0based_fixed.bed
+
+# For Dispar - Remove `.1` from chromosome names
+awk 'BEGIN{OFS="\t"} {sub(/\.[0-9]+$/, "", $1); print $0}' /tmp/dispar_sine_coords_0based_corrected.bed > /tmp/dispar_sine_coords_0based_fixed.bed
+
+# Step 3: Perform bedtools Intersection
+
+# For Histolytica - Run the intersection with the cleaned and fixed files
+bedtools intersect -a /tmp/histolytica_sine_coords_0based_fixed.bed -b 00_inputs/histolytica/Entamoeba_histolytica.JCVI-ESG2-1.0.60.cleaned.sorted.gff3 -wa -wb > /tmp/histolytica_intersect_corrected.bed
+
+# For Dispar - Run the intersection with the cleaned and fixed files
+bedtools intersect -a /tmp/dispar_sine_coords_0based_fixed.bed -b 00_inputs/dispar/AmoebaDB-59_EdisparSAW760.cleaned.sorted.gff -wa -wb > /tmp/dispar_intersect_corrected.bed
+
+# Step 4: Verify Results
+
+# For Histolytica - Check the number of intersections
+wc -l /tmp/histolytica_intersect_corrected.bed
+head -n 10 /tmp/histolytica_intersect_corrected.bed
+
+# For Dispar - Check the number of intersections
+wc -l /tmp/dispar_intersect_corrected.bed
+head -n 10 /tmp/dispar_intersect_corrected.bed
+
+# Clean histolytica proteins file
+awk '/^>/ {print $0} !/^>/ {gsub(/[^A-Za-z]/, ""); print}' 00_inputs/histolytica/histo_proteins.faa > 00_inputs/histolytica/histo_proteins_cleaned_test.faa
+wc -l 00_inputs/histolytica/histo_proteins_cleaned_test.faa
+
+# Clean dispar proteins file
+awk '/^>/ {print $0} !/^>/ {gsub(/[^A-Za-z]/, ""); print}' 00_inputs/dispar/dispar_proteins.faa > 00_inputs/dispar/dispar_proteins_cleaned_test.faa
+wc -l 00_inputs/dispar/dispar_proteins_cleaned_test.faa
+
+
+# Step 0.2: Building full-proteome BLAST DBs
+echo "► Step 0.2: Building full-proteome BLAST DBs…"
+module purge
+module load blast
+mkdir -p 10_flanking_genes/{histolytica,dispar}/blastdb
+
+# Build BLAST DB for Histolytica, if not already built
+if [[ ! -f 10_flanking_genes/histolytica/blastdb/histo_full_db.nhr ]]; then
+  makeblastdb \
+    -in 00_inputs/histolytica/histo_proteins.faa \
+    -dbtype prot -parse_seqids \
+    -out 10_flanking_genes/histolytica/blastdb/histo_full_db \
+    -logfile 10_flanking_genes/histolytica/blastdb/histo_makeblastdb.log
+  echo "   Histolytica BLAST DB created."
+else
+  echo "   Histolytica BLAST DB already exists, skipping creation."
+fi
+
+# Build BLAST DB for Dispar, if not already built
+if [[ ! -f 10_flanking_genes/dispar/blastdb/dispar_full_db.nhr ]]; then
+  makeblastdb \
+    -in 00_inputs/dispar/dispar_proteins.faa \
+    -dbtype prot -parse_seqids \
+    -out 10_flanking_genes/dispar/blastdb/dispar_full_db \
+    -logfile 10_flanking_genes/dispar/blastdb/dispar_makeblastdb.log
+  echo "   Dispar BLAST DB created."
+else
+  echo "   Dispar BLAST DB already exists, skipping creation."
+fi
+
+echo "   → Databases built in 10_flanking_genes/*/blastdb/"
+
+BP=10_flanking_genes/blastp
+mkdir -p "$BP"
+
+# Histolytica vs Dispar
+[[ -s $BP/h2d_full.tsv ]] || blastp \
+    -query 00_inputs/histolytica/histo_proteins.faa \
+    -db 10_flanking_genes/dispar/blastdb/dispar_full_db \
+    -out $BP/h2d_full.tsv \
+    -outfmt "6 qseqid sseqid bitscore evalue" \
+    -max_target_seqs 1 -max_hsps 1 -num_threads 4
+
+# Dispar vs Histolytica
+[[ -s $BP/d2h_full.tsv ]] || blastp \
+    -query 00_inputs/dispar/dispar_proteins.faa \
+    -db 10_flanking_genes/histolytica/blastdb/histo_full_db \
+    -out $BP/d2h_full.tsv \
+    -outfmt "6 qseqid sseqid bitscore evalue" \
+    -max_target_seqs 1 -max_hsps 1 -num_threads 4
+
+# Sort and select the top hit per query from both BLASTP files
+
+# For h2d_full.tsv (histolytica to dispar)
+sort -k1,1 -k3,3nr 10_flanking_genes/blastp/h2d_full.tsv | awk '!seen[$1]++' > /tmp/h2d.best
+
+# For d2h_full.tsv (dispar to histolytica)
+sort -k1,1 -k3,3nr 10_flanking_genes/blastp/d2h_full.tsv | awk '!seen[$1]++' > /tmp/d2h.best
+
+# You can now inspect the result in /tmp/h2d.best and /tmp/d2h.best
+
+awk 'NR==FNR{m[$1]=$2;next} m[$2]==$1{print $1,$2}' /tmp/h2d.best /tmp/d2h.best > 10_flanking_genes/blastp/reciprocal_best_hits_full.tsv
+
+
+# Here’s the correct code for step 8 that creates the combined gene list in BED format:
+
+# Process histolytica gene entries and dispar protein-coding gene entries
+awk 'BEGIN{OFS="\t"} 
+  # Process histolytica gene entries
+  $3 == "gene" { 
+    print $1, $4-1, $5, $9
+  } 
+  # Process dispar protein-coding gene entries
+  $3 == "protein_coding_gene" { 
+    print $1, $4-1, $5, $9 
+  }' 00_inputs/histolytica/histo_genes_only.gff3 00_inputs/dispar/AmoebaDB-59_EdisparSAW760.fixed2.gff.sorted.gff3 \
+| sed -E 's/ID=([^;]+);.*/\1/' \
+| sort -k1,1 -k2,2n > 10_flanking_genes/combined_genes.bed
+
+
+# After running the makeblastdb commands, you can view the logs:
+cat 10_flanking_genes/histolytica/blastdb/histo_makeblastdb.log
+cat 10_flanking_genes/dispar/blastdb/dispar_makeblastdb.log
+
+#!/bin/bash
+# Load bedtools
+module load bedtools/2.31.1
+
+# Loop through Histolytica and Dispar species
+for sp in histolytica dispar; do
+  echo "=== Flagging transcription for $sp ==="
+  
+  # Define input files
+  MAP=10_flanking_genes/$sp/SINE1_to_gene_all.tsv
+  EXP=09_SINE1_downstream/$sp/expressed_SINEs_abinitio.bed
+  OUT=10_flanking_genes/$sp/SINE1_to_gene_all_exprflag.tsv
+
+  # Format the mapping file (split the locus into chr, start, and end)
+  awk -F'\t' 'BEGIN{OFS="\t"}{
+    split($1,a,":|-"); 
+    print a[1],a[2],a[3],$1,$2 
+  }' "$MAP" > /tmp/SINE1_all.bed
+
+  # Count the intersection with expressed SINEs (whether the SINE is expressed or not)
+  bedtools intersect -c -a /tmp/SINE1_all.bed -b "$EXP" > /tmp/SINE1_cnt.bed
+
+  # Flag transcribed or not based on overlap (if the count > 0, it's transcribed)
+  awk 'BEGIN{OFS="\t"; print "sine_locus","gene_id","sine_transcribed"} 
+       { trans=($5>0?"yes":"no"); print $4,$6,trans }' /tmp/SINE1_cnt.bed > "$OUT"
+
+  # Output the result
+  echo "[$sp] 13C: flagged $(wc -l < "$OUT") loci (incl. header)"
+done
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Change to the project directory
+cd ~/Edispar_SINE_project_2
+
+# Load the required module
+module load bedtools/2.31.1
+
+# ───────────────────────────────────────────────────────────
+# 13C) Flag each union SINE for transcription (yes/no)
+# ───────────────────────────────────────────────────────────
+for sp in histolytica dispar; do
+  # Map SINE loci to genes (already done in Step 13B, we're using the result from here)
+  MAP=10_flanking_genes/$sp/SINE1_to_gene_all.tsv
+
+  # Expression file for SINE loci (ab initio predictions)
+  EXP=09_SINE1_downstream/$sp/expressed_SINEs_abinitio.bed
+
+  # Output file for the SINE-to-gene flag with transcription status
+  OUT=10_flanking_genes/$sp/SINE1_to_gene_all_exprflag.tsv
+
+  # Extract the SINE loci and prepare for bedtools intersection
+  awk -F'\t' 'BEGIN{OFS="\t"}{ split($1,a,":|-"); print a[1],a[2],a[3],$1,$2 }' "$MAP" > /tmp/SINE1_all.bed
+
+  # Use bedtools to find intersection with expression data (ab initio transcribed SINEs)
+  bedtools intersect -c -a /tmp/SINE1_all.bed -b "$EXP" > /tmp/SINE1_cnt.bed
+
+  # Flag each SINE for transcription (yes/no) based on intersection count
+  awk 'BEGIN{OFS="\t"; print "sine_locus","gene_id","sine_transcribed"} 
+       { trans=($5>0?"yes":"no"); print $4,$6,trans }' /tmp/SINE1_cnt.bed > "$OUT"
+
+  # Output the number of loci flagged for transcription
+  echo "[$sp] 13C: flagged $(wc -l < "$OUT") loci (incl. header)"
+done
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Change to the project directory
+cd ~/Edispar_SINE_project_2
+
+# Output file for full orthologue summary
+OUT_full=10_flanking_genes/orthologue_SINE_expr_summary_full.tsv
+echo -e "Histo_gene\tDispar_gene\tHisto_SINE_expr\tDispar_SINE_expr\tHisto_gene_expr_full\tDispar_gene_expr_full" \
+  > "$OUT_full"
+
+# Path to the reciprocal best hits file (RBH)
+RBH=/tmp/rbh_fixed.tsv
+
+# Iterate through the RBH file to build the summary
+while read -r H D; do
+  # Get SINE expression status for Histolytica gene
+  Hs=$(awk -v g="$H" '$1==g{print $3; exit}' 10_flanking_genes/histolytica/SINE1_to_gene_all_exprflag.tsv 2>/dev/null || echo no)
+  
+  # Get SINE expression status for Dispar gene
+  Ds=$(awk -v g="$D" '$1==g{print $3; exit}' 10_flanking_genes/dispar/SINE1_to_gene_all_exprflag.tsv    2>/dev/null || echo no)
+
+  # Get gene expression status for Histolytica gene (from the full gene expression data)
+  Hg=$(awk -v g="$H" '$1==g{print $3; exit}' 10_flanking_genes/histolytica/gene_expression_counts.tsv 2>/dev/null || echo no)
+  
+  # Get gene expression status for Dispar gene (from the full gene expression data)
+  Dg=$(awk -v g="$D" '$1==g{print $3; exit}' 10_flanking_genes/dispar/gene_expression_counts.tsv    2>/dev/null || echo no)
+
+  # Append to the output file with full details
+  echo -e "${H}\t${D}\t${Hs}\t${Ds}\t${Hg}\t${Dg}" >> "$OUT_full"
+done < "$RBH"
+
+echo "13D: scaffolded orthologue summary → $OUT_full"
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Change to the project directory
+cd ~/Edispar_SINE_project_2
+
+# Define output file for full summary
+OUT_full=10_flanking_genes/orthologue_SINE_expr_summary_full.tsv
+
+# Print header to output file
+echo -e "Histo_gene\tDispar_gene\tHisto_SINE_expr\tDispar_SINE_expr\tHisto_gene_expr_full\tDispar_gene_expr_full" > "$OUT_full"
+
+# Path to the cleaned Reciprocal Best Hits (RBH) file
+RBH=/tmp/rbh_fixed.tsv
+
+# Iterate through the cleaned RBH file to build the summary
+while read -r H D; do
+  # Get SINE expression status for Histolytica gene (from cleaned SINE expression file)
+  Hs=$(awk -v g="$H" '$1==g{print $3; exit}' 10_flanking_genes/histolytica/SINE1_to_gene_all_exprflag.tsv 2>/dev/null || echo no)
+  
+  # Get SINE expression status for Dispar gene (from cleaned SINE expression file)
+  Ds=$(awk -v g="$D" '$1==g{print $3; exit}' 10_flanking_genes/dispar/SINE1_to_gene_all_exprflag.tsv 2>/dev/null || echo no)
+
+  # Get gene expression status for Histolytica gene (from cleaned gene expression data)
+  Hg=$(awk -v g="$H" '$1==g{print $3; exit}' 10_flanking_genes/histolytica/gene_expression_counts_cleaned.tsv 2>/dev/null || echo no)
+  
+  # Get gene expression status for Dispar gene (from cleaned gene expression data)
+  Dg=$(awk -v g="$D" '$1==g{print $3; exit}' 10_flanking_genes/dispar/gene_expression_counts_cleaned.tsv 2>/dev/null || echo no)
+
+  # Append to the output file with full details
+  echo -e "$H\t$D\t$Hs\t$Ds\t$Hg\t$Dg" >> "$OUT_full"
+done < "$RBH"
+
+# Final confirmation message
+echo "13D: Scaffolded orthologue summary → $OUT_full"
+
+# Check the output file
+ls -lh "$OUT_full"
+wc -l "$OUT_full"
+head -n 20 "$OUT_full"
