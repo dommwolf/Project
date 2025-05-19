@@ -918,7 +918,7 @@ module load cufflinks emboss blast/2.11.0 seqtk bedtools
 #!/usr/bin/env bash
 
 cd ~/Edispar_SINE_project_2
-
+#12
 # 1) Load tools
 module purge
 module load cufflinks/2.2.1   # provides gffread
@@ -1046,6 +1046,8 @@ grep -c $'\tyes\t' comparative_SINE.tsv
 echo -e "\nDone! Step 12 is complete.\n"
 #!/usr/bin/env bash
 set -euo pipefail
+
+#13
 
 # Step 1: Adjust Negative Start Positions (Ensure start positions are non-negative)
 
