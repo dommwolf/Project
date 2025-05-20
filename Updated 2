@@ -633,16 +633,36 @@ DISPAR_NEAR=$(awk 'NR>1 && $3<1000' 10_flanking_genes/dispar/SINE1_to_gene_all_d
 echo "Histolytica: $HISTO_NEAR"
 echo "Dispar:      $DISPAR_NEAR"
 
-# ===================================================================
-# 4. Strand Orientation Distribution (upstream vs downstream)
-# ===================================================================
-echo -e "\n=== 4. Strand Orientation ==="
-for sp in histolytica dispar; do
-  echo "$sp:"
-  awk 'NR>1 { print $4 }' 10_flanking_genes/$sp/SINE1_to_gene_all_dist.tsv \
-    | sort \
-    | uniq -c
-done
+# -------------------------------
+# 4a. Count genes with SINEs mapped
+# -------------------------------
+
+# For E. dispar:
+DISPAR_GENES_WITH_SINE=$(awk 'NR>1 && $2!="."' 10_flanking_genes/dispar/SINE1_to_gene_all_exprflag.tsv | cut -f2 | sort | uniq | wc -l)
+
+# For E. histolytica:
+HISTO_GENES_WITH_SINE=$(awk 'NR>1 && $2!="."' 10_flanking_genes/histolytica/SINE1_to_gene_all_exprflag.tsv | cut -f2 | sort | uniq | wc -l)
+
+# -------------------------------
+# 4b. Count total genes (excluding header)
+# -------------------------------
+
+# For E. dispar:
+DISPAR_TOTAL_GENES=$(( $(wc -l < 10_flanking_genes/dispar/gene_expression_counts_cleaned.tsv) - 1 ))
+
+# For E. histolytica:
+HISTO_TOTAL_GENES=$(( $(wc -l < 10_flanking_genes/histolytica/gene_expression_counts_cleaned.tsv) - 1 ))
+
+# -------------------------------
+# 4c. Print results and percentages
+# -------------------------------
+
+echo "E. dispar:   $DISPAR_GENES_WITH_SINE genes with SINE / $DISPAR_TOTAL_GENES total genes"
+echo "E. histolytica: $HISTO_GENES_WITH_SINE genes with SINE / $HISTO_TOTAL_GENES total genes"
+
+printf "E. dispar:   %.2f%% of genes have SINEs\n" "$(echo "$DISPAR_GENES_WITH_SINE/$DISPAR_TOTAL_GENES*100" | bc -l)"
+printf "E. histolytica: %.2f%% of genes have SINEs\n" "$(echo "$HISTO_GENES_WITH_SINE/$HISTO_TOTAL_GENES*100" | bc -l)"
+
 
 # ───────────────────────────────────────────────────────────────
 # 5. Co-expression Rate (SINE + gene both expressed, overrideable)
@@ -699,3 +719,8 @@ echo -e "\n=== 6. Functional Enrichment Files ==="
 echo "Foreground gene list: dispar_SINE4_genes.txt ($(wc -l < dispar_SINE4_genes.txt) genes)"
 echo "Background gene list: all_dispar_genes.txt ($(wc -l < all_dispar_genes.txt) genes)"
 echo "→ Ready for DAVID, gProfiler, etc."
+
+#7
+awk -F'\t' 'NR>1 && $3=="yes" && $4=="yes"{c++} END{print "Both have SINEs:", c+0}' 10_flanking_genes/orthologue_SINE_expr_summary_FIXED.tsv
+awk -F'\t' 'NR>1 && $3=="yes" && $4=="no"{c++} END{print "Only histolytica has SINE:", c+0}' 10_flanking_genes/orthologue_SINE_expr_summary_FIXED.tsv
+awk -F'\t' 'NR>1 && $3=="no" && $4=="yes"{c++} END{print "Only dispar has SINE:", c+0}' 10_flanking_genes/orthologue_SINE_expr_summary_FIXED.tsv
