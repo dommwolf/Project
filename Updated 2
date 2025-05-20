@@ -583,3 +583,119 @@ grep -P "\tprotein_coding_gene\t" 00_inputs/dispar/AmoebaDB-59_EdisparSAW760.cle
   | sed -E 's/.*ID=([^;]+);.*/\1/' \
   | sort -u > all_dispar_genes.txt
 echo "→ all_dispar_genes.txt: $(wc -l < all_dispar_genes.txt) genes"
+
+# ===================================================================
+# 1. Catalog Size (number of union SINE loci)
+# ===================================================================
+echo "=== 1. Catalog Size ==="
+echo "Histolytica:" $(wc -l < 08_SINE1_union/histolytica/SINE1_union.bed)
+echo "Dispar:     " $(wc -l < 08_SINE1_union/dispar/SINE1_union.bed)
+
+# ───────────────────────────────────────────────────────────────
+# 2. % Expressed SINEs (with overrideable file paths)
+# ───────────────────────────────────────────────────────────────
+
+# set these to point at the expr‐flag files you actually want to use:
+HISTO_FLAG="10_flanking_genes/histolytica/SINE1_to_gene_all_exprflag.tsv"
+DISPAR_FLAG="10_flanking_genes/dispar/SINE1_to_gene_all_exprflag.tsv"
+# e.g. if you had a v2 version:
+# HISTO_FLAG="10_flanking_genes/histo/SINE1_to_gene_all_exprflag_v2.tsv"
+# DISPAR_FLAG="10_flanking_genes/dispar/SINE1_to_gene_all_exprflag_v2.tsv"
+
+HISTO_BED="08_SINE1_union/histolytica/SINE1_union.bed"
+DISPAR_BED="08_SINE1_union/dispar/SINE1_union.bed"
+
+echo -e "\n=== 2. % Expressed SINEs ==="
+
+# count the “yes” flags:
+HISTO_EXP=$(awk 'NR>1 && $3=="yes"' "$HISTO_FLAG" | wc -l)
+DISPAR_EXP=$(awk 'NR>1 && $3=="yes"' "$DISPAR_FLAG" | wc -l)
+# count the total loci:
+HISTO_TOT=$(wc -l < "$HISTO_BED")
+DISPAR_TOT=$(wc -l < "$DISPAR_BED")
+
+# print with percentages:
+printf "Histolytica: %d / %d (%.1f%%)\n" \
+       "$HISTO_EXP" "$HISTO_TOT" \
+       "$(echo "scale=1; 100*$HISTO_EXP/$HISTO_TOT" | bc)"
+
+printf "Dispar:      %d / %d (%.1f%%)\n" \
+       "$DISPAR_EXP" "$DISPAR_TOT" \
+       "$(echo "scale=1; 100*$DISPAR_EXP/$DISPAR_TOT" | bc)"
+
+
+# ===================================================================
+# 3. Proximity (<1 kb from nearest gene)
+# ===================================================================
+echo -e "\n=== 3. Proximity (<1 kb from gene) ==="
+HISTO_NEAR=$(awk 'NR>1 && $3<1000' 10_flanking_genes/histolytica/SINE1_to_gene_all_dist.tsv | wc -l)
+DISPAR_NEAR=$(awk 'NR>1 && $3<1000' 10_flanking_genes/dispar/SINE1_to_gene_all_dist.tsv | wc -l)
+echo "Histolytica: $HISTO_NEAR"
+echo "Dispar:      $DISPAR_NEAR"
+
+# ===================================================================
+# 4. Strand Orientation Distribution (upstream vs downstream)
+# ===================================================================
+echo -e "\n=== 4. Strand Orientation ==="
+for sp in histolytica dispar; do
+  echo "$sp:"
+  awk 'NR>1 { print $4 }' 10_flanking_genes/$sp/SINE1_to_gene_all_dist.tsv \
+    | sort \
+    | uniq -c
+done
+
+# ───────────────────────────────────────────────────────────────
+# 5. Co-expression Rate (SINE + gene both expressed, overrideable)
+# ───────────────────────────────────────────────────────────────
+
+# point these at the versions you actually want to use:
+HISTO_FLAG="10_flanking_genes/histolytica/SINE1_to_gene_all_exprflag.tsv"
+DISPAR_FLAG="10_flanking_genes/dispar/SINE1_to_gene_all_exprflag.tsv"
+# e.g. if you have a v2 file:
+# HISTO_FLAG="10_flanking_genes/histolytica/SINE1_to_gene_all_exprflag_v2.tsv"
+# DISPAR_FLAG="10_flanking_genes/dispar/SINE1_to_gene_all_exprflag_v2.tsv"
+
+HISTO_T3="10_flanking_genes/histolytica/expressed_genes_T3.txt"
+DISPAR_T3="10_flanking_genes/dispar/expressed_genes_T3.txt"
+
+echo -e "\n=== 5. Co-expression Rate ==="
+
+# loop over species
+for sp in histolytica dispar; do
+  # pick the right files
+  if [[ "$sp" == "histolytica" ]]; then
+    MAP="$HISTO_FLAG"
+    T3="$HISTO_T3"
+  else
+    MAP="$DISPAR_FLAG"
+    T3="$DISPAR_T3"
+  fi
+
+  OUT="/tmp/${sp}_SINE_gene_expr_summary.tsv"
+
+  # build a temporary summary of SINE vs gene expression
+  awk 'NR>1{print $1,$2,$3}' OFS="\t" "$MAP" | \
+  while IFS=$'\t' read locus gene sinetr; do
+    gene_exp=no
+    if [[ "$gene" != "." ]] && grep -Fxq "$gene" "$T3"; then
+      gene_exp=yes
+    fi
+    echo -e "$locus\t$gene\t$sinetr\t$gene_exp"
+  done > "$OUT"
+
+  # count how many are “yes/yes”
+  BOTH_EXP=$(awk -F'\t' '$3=="yes" && $4=="yes"' "$OUT" | wc -l)
+  TOTAL=$(awk 'END{print NR-1}' "$MAP")
+
+  printf "%s: %d / %d SINE-gene pairs co-expressed (%.1f%%)\n" \
+         "$sp" "$BOTH_EXP" "$TOTAL" \
+         "$(echo "scale=1; 100*$BOTH_EXP/$TOTAL" | bc)"
+done
+
+# ===================================================================
+# 6. Functional Enrichment File Lists
+# ===================================================================
+echo -e "\n=== 6. Functional Enrichment Files ==="
+echo "Foreground gene list: dispar_SINE4_genes.txt ($(wc -l < dispar_SINE4_genes.txt) genes)"
+echo "Background gene list: all_dispar_genes.txt ($(wc -l < all_dispar_genes.txt) genes)"
+echo "→ Ready for DAVID, gProfiler, etc."
