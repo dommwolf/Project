@@ -724,3 +724,33 @@ echo "→ Ready for DAVID, gProfiler, etc."
 awk -F'\t' 'NR>1 && $3=="yes" && $4=="yes"{c++} END{print "Both have SINEs:", c+0}' 10_flanking_genes/orthologue_SINE_expr_summary_FIXED.tsv
 awk -F'\t' 'NR>1 && $3=="yes" && $4=="no"{c++} END{print "Only histolytica has SINE:", c+0}' 10_flanking_genes/orthologue_SINE_expr_summary_FIXED.tsv
 awk -F'\t' 'NR>1 && $3=="no" && $4=="yes"{c++} END{print "Only dispar has SINE:", c+0}' 10_flanking_genes/orthologue_SINE_expr_summary_FIXED.tsv
+
+#!/bin/bash
+#2 combo
+
+cd ~/Edispar_SINE_project_2
+
+echo "► Filtering for *expressed SINE transcripts* in merged GTFs"
+
+# Define input and output
+H_TXIDS="09_SINE1_downstream/histolytica/histolytica_expressed_SINE_txids.txt"
+D_TXIDS="09_SINE1_downstream/dispar/dispar_expressed_SINE_txids.txt"
+
+H_GTF="merged_histolytica_abinitio.final.gtf"
+D_GTF="merged_dispar_abinitio.final.gtf"
+
+H_OUT="filtered_histo_expressed_SINEs_only_FIXED.gtf"
+D_OUT="filtered_dispar_expressed_SINEs_only_FIXED.gtf"
+
+# Run filtering: for each transcript_id in list, extract all matching lines from GTF
+echo "→ [Histo] writing to $H_OUT"
+grep -Ff <(tr -d '\r' < "$H_TXIDS") "$H_GTF" > "$H_OUT"
+
+echo "→ [Dispar] writing to $D_OUT"
+grep -Ff <(tr -d '\r' < "$D_TXIDS") "$D_GTF" > "$D_OUT"
+
+# Sanity check
+echo
+echo "✓ Line counts:"
+wc -l "$H_OUT" "$D_OUT"
+
