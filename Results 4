@@ -1,0 +1,45 @@
+cd ~/Edispar_SINE_project_2
+
+# 1. Extract gene features from GFF
+
+# Dispar: protein_coding_gene feature
+awk -F'\t' '$3=="protein_coding_gene" && $9 ~ /ID=/' OFS='\t' 00_inputs/dispar/AmoebaDB-59_EdisparSAW760.cleaned.sorted.gff \
+| awk '{
+  match($9, /ID=([^;]+)/, a)
+  print $1, $4-1, $5, a[1]
+}' OFS='\t' > 10_flanking_genes/dispar/genes.bed
+
+# Histolytica: gene feature
+awk -F'\t' '$3=="gene" && $9 ~ /ID=/' OFS='\t' 00_inputs/histolytica/Entamoeba_histolytica.JCVI-ESG2-1.0.60.cleaned.sorted.gff \
+| awk '{
+  match($9, /ID=([^;]+)/, a)
+  print $1, $4-1, $5, a[1]
+}' OFS='\t' > 10_flanking_genes/histolytica/genes.bed
+
+# 2. Fix contig names for dispar (add ".1" suffix)
+awk 'BEGIN{OFS="\t"} { $1=$1".1"; print }' 10_flanking_genes/dispar/genes.bed > 10_flanking_genes/dispar/genes.fixed.bed
+
+# 3. Fix contig names for histolytica (add ".1" suffix)
+awk 'BEGIN{OFS="\t"} { $1=$1".1"; print }' 10_flanking_genes/histolytica/genes.bed > 10_flanking_genes/histolytica/genes.fixed.bed
+
+# 4. Sort all BED files
+
+sort -k1,1 -k2,2n 10_flanking_genes/dispar/genes.fixed.bed > 10_flanking_genes/dispar/genes.sorted.bed
+sort -k1,1 -k2,2n 10_flanking_genes/histolytica/genes.fixed.bed > 10_flanking_genes/histolytica/genes.sorted.bed
+
+sort -k1,1 -k2,2n 08_SINE1_union/dispar/SINE1_union.bed > 08_SINE1_union/dispar/SINE1_union.sorted.bed
+sort -k1,1 -k2,2n 08_SINE1_union/histolytica/SINE1_union.bed > 08_SINE1_union/histolytica/SINE1_union.sorted.bed
+
+# 5. Run bedtools closest to get gene-to-SINE distances
+
+bedtools closest -a 10_flanking_genes/dispar/genes.sorted.bed \
+                 -b 08_SINE1_union/dispar/SINE1_union.sorted.bed \
+                 -D a -t first > 10_flanking_genes/dispar/gene_to_SINE_dist.tsv
+
+bedtools closest -a 10_flanking_genes/histolytica/genes.sorted.bed \
+                 -b 08_SINE1_union/histolytica/SINE1_union.sorted.bed \
+                 -D a -t first > 10_flanking_genes/histolytica/gene_to_SINE_dist.tsv
+
+# 6. Verify output (optional)
+head -n 5 10_flanking_genes/dispar/gene_to_SINE_dist.tsv
+head -n 5 10_flanking_genes/histolytica/gene_to_SINE_dist.tsv
